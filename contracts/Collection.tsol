@@ -1,0 +1,133 @@
+pragma ever-solidity ^0.62.0;
+
+import '@itgold/everscale-tip/contracts/TIP4_2/TIP4_2Collection.sol';
+import '@itgold/everscale-tip/contracts/TIP4_3/TIP4_3Collection.sol';
+import '@itgold/everscale-tip/contracts/access/OwnableInternal.sol';
+import './Nft.tsol';
+
+contract Collection is TIP4_2Collection, TIP4_3Collection, OwnableInternal {
+
+    // ---------------------------
+    // Errors
+    // ---------------------------
+ uint8 constant sender_is_not_owner = 101;
+    uint8 constant value_is_less_than_required = 102;
+
+
+  uint128 _remainOnNft = 0.3 ton;
+
+    // ---------------------------
+    // Minting 
+    // ---------------------------
+
+    uint128 public mintPrice;
+
+    event propertyMinted(uint256 id, address owner);
+    event propertyGenerated(uint256 id, address owner);
+
+    // ---------------------------
+    // Common 
+    // ---------------------------
+
+    uint128 public collectionSize;
+
+    constructor(
+        TvmCell codeProperty,
+        string json,
+        TvmCell codeIndex,
+        TvmCell codeIndexBasis,
+        address ownerAddress
+    ) TIP4_1Collection (
+        codeProperty
+    ) TIP4_2Collection (
+        json
+    ) TIP4_3Collection (
+        codeIndex,
+        codeIndexBasis
+    ) 
+    OwnableInternal(
+        ownerAddress
+    ) public {
+        tvm.accept();
+
+        collectionSize = _collectionSize;
+        mintPrice = _mintPrice;
+    }
+
+    // ---------------------------
+    // Public functions 
+    // ---------------------------
+
+    function mintProperty() external virtual {
+        require(msg.value > mintPrice + 0.3 ton, value_is_less_than_required);
+
+        tvm.rawReserve(0, 4);
+
+        _totalSupply++;
+        uint256 id = uint256(_totalSupply);
+
+        emit PropertyMinted(id, msg.sender);
+    }
+
+    // ---------------------------
+    // Owner only functions 
+    // ---------------------------
+
+    function generateProperty(
+        uint256 id, 
+        string json, 
+        address owner
+    ) external onlyOwner {
+        tvm.rawReserve(0, 4);
+
+        TvmCell codeProperty = _buildPropertyCode(address(this));
+        TvmCell stateProperty = _buildPropertyState(codeProperty, id);
+
+        address propertyAddr = new Property{
+            stateInit: stateProperty,
+            value: 0,
+            flag: 128
+        }(
+            owner,
+            msg.sender,
+            0.3 ton,
+            json,
+            _codeIndex,
+            _indexDeployValue,
+            _indexDestroyValue
+        );
+
+        emit PropertyGenerated(
+            id, 
+            owner
+        );
+    }
+
+    function changeMintState(MintState _mintState) external onlyOwner {
+        // tvm.rawReserve(0, 4);
+        mintState = _mintState;
+    }
+
+    function addToWhitelist(address toAddAddress) external onlyOwner {
+    // function addToWhitelist(address toAddAddress) external onlyOwner  {
+        whitelist[toAddAddress] = true;
+    }
+
+    function removeFromWhitelist(address toRemoveAddress) external onlyOwner {
+        delete whitelist[toRemoveAddress];
+    }
+
+    // ---------------------------
+    // Interface impl
+    // ---------------------------
+
+    function _buildPropertyState(TvmCell code, uint256 id)
+		internal
+		pure
+		virtual
+		override (TIP4_2Collection, TIP4_3Collection)
+		returns (TvmCell)
+	{
+		return tvm.buildStateInit({contr: Property, varInit: {_id: id}, code: code});
+	}
+}

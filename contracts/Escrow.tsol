@@ -1,0 +1,157 @@
+pragma ever-solidity >= 0.61.2;
+
+import "@itgold/everscale-tip/contracts/TIP4_1/interfaces/ITIP4_1NFT.sol";
+import "@itgold/everscale-tip/contracts/TIP4_1/interfaces/INftTransfer.sol";
+import '@itgold/everscale-tip/contracts/access/OwnableInternal.sol';
+
+interface  TIP4 {
+    function transferFrom(
+        address _from,
+        address _to,
+        uint256 _id
+    ) external;
+}
+
+contract Escrow  is INftTransfer, OwnableInternal, IAcceptTokensTransferCallback  {
+    address public nftAddress;
+    address  public seller;
+    address public inspector;
+    address public lender;
+
+      address public _tokenRoot;
+    // ERRORS
+    uint8 constant sender_is_not_owner = 101;
+    uint8 constant sender_is_not_buyer = 102;
+    uint8 constant sender_is_not_seller = 103;
+    uint8 constant sender_is_not_inspector = 104;
+    uint8 constant value_is_less_than_required = 105;
+
+
+    modifier onlyBuyer(uint256 _nftID) {
+        require(msg.sender == buyer[_nftID], sender_is_not_buyer);
+           tvm.accept();
+        _;
+    }
+
+    modifier onlySeller() {
+        require(msg.sender == seller, sender_is_not_seller);
+           tvm.accept();
+        _;
+    }
+
+    modifier onlyInspector() {
+        require(msg.sender == inspector,sender_is_not_inspector);
+           tvm.accept();
+        _;
+    }
+
+    mapping(uint256 => bool) public isListed;
+    mapping(uint256 => uint256) public purchasePrice;
+    mapping(uint256 => uint256) public escrowAmount;
+    mapping(uint256 => address) public buyer;
+    mapping(uint256 => bool) public inspectionPassed;
+    mapping(uint256 => mapping(address => bool)) public approval;
+
+
+    constructor(
+        address _nftAddress,
+        address  _seller,
+        address _inspector,
+        address _lender,
+        address tokenRoot,
+        address sendRemainingGasTo
+    ) {
+        tvm.accept();
+         tvm.rawReserve(0.2 ever, 0);
+        nftAddress = _nftAddress;
+        seller = _seller;
+        inspector = _inspector;
+        lender = _lender;
+
+         _tokenRoot = tokenRoot;
+
+         ITokenRoot(_tokenRoot).deployWallet {
+            value: 0.2 ever,
+            flag: 1,
+            callback: Auction.onTokenWallet
+        } (
+            address(this),
+            0.1 ever
+        );
+        // memento gas management :)
+        sendRemainingGasTo.transfer({ value: 0, flag: 128, bounce: false });
+    
+    }
+
+    function list(
+        uint256 _nftID,
+        address _buyer,
+        uint256 _purchasePrice,
+        uint256 _escrowAmount
+    ) external  onlySeller {
+        // Transfer NFT from seller to this contract
+        TIP4(nftAddress).transferFrom(msg.sender, address(this), _nftID);
+
+        isListed[_nftID] = true;
+        purchasePrice[_nftID] = _purchasePrice;
+        escrowAmount[_nftID] = _escrowAmount;
+        buyer[_nftID] = _buyer;
+    }
+
+    // Put Under Contract (only buyer - payable escrow)
+    function depositEarnest(uint256 _nftID) external onlyBuyer(_nftID) {
+        require(msg.value >= escrowAmount[_nftID], value_is_less_than_required);
+    }
+
+    // Update Inspection Status (only inspector)
+    function updateInspectionStatus(uint256 _nftID, bool _passed)
+        external
+        onlyInspector
+    {
+        inspectionPassed[_nftID] = _passed;
+    }
+
+    // Approve Sale
+    function approveSale(uint256 _nftID) external {
+        approval[_nftID][msg.sender] = true;
+    }
+
+    // Finalize Sale
+    // -> Require inspection status (add more items here, like appraisal)
+    // -> Require sale to be authorized
+    // -> Require funds to be correct amount
+    // -> Transfer NFT to buyer
+    // -> Transfer Funds to Seller
+    function finalizeSale(uint256 _nftID) external {
+        require(inspectionPassed[_nftID]);
+        require(approval[_nftID][buyer[_nftID]]);
+        require(approval[_nftID][seller]);
+        require(approval[_nftID][lender]);
+        require(address(this).balance >= purchasePrice[_nftID]);
+
+        isListed[_nftID] = false;
+
+        (bool success, ) = payable(seller).call{value: address(this).balance}(
+            ""
+        );
+        require(success);
+
+        TIP4(nftAddress).transferFrom(address(this), buyer[_nftID], _nftID);
+    }
+
+    // Cancel Sale (handle earnest deposit)
+    // -> if inspection status is not approved, then refund, otherwise send to seller
+    function cancelSale(uint256 _nftID) external {
+        if (inspectionPassed[_nftID] == false) {
+            payable(buyer[_nftID]).transfer(address(this).balance);
+        } else {
+            payable(seller).transfer(address(this).balance);
+        }
+    }
+
+    // receive() external {}
+
+    function getBalance() external view returns (uint256) {
+        return address(this).balance;
+    }
+}
